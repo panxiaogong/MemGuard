@@ -10,8 +10,8 @@ memguard 真实 Agent 接入演示
 前置：
   1. cp .env.example .env  并填入 OPENAI_API_KEY
   2. pip install -r requirements.txt
-  3. 另开终端：python -m uvicorn memg.gateway.proxy:app --port 8080
-  4. python memg/agent_demo.py
+  3. 另开终端：python -m uvicorn MemGuard.gateway.proxy:app --port 8080
+  4. python MemGuard/agent_demo.py
 """
 
 import asyncio
