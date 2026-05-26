@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memguard"
+version = "0.1.0"
+description = "AI Agent Memory Protection Engine (AMP Engine)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "潘小工"},
+]
+keywords = ["ai", "memory", "protection", "security", "llm", "agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "cryptography>=42.0.0",
+    "openai>=1.30.0",
+    "anthropic>=0.28.0",
+    "litellm>=1.40.0",
+    "chromadb>=0.5.0",
+    "lancedb>=0.8.0",
+    "httpx>=0.27.0",
+    "aiohttp>=3.9.0",
+    "apscheduler>=3.10.0",
+    "python-dotenv>=1.0.0",
+    "structlog>=24.1.0",
+    "numpy>=1.26.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-mock>=3.14.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/panxiaogong/MemGuard"
+Repository = "https://github.com/panxiaogong/MemGuard"
+
+[project.scripts]
+memguard = "MemGuard.cli:main"
+
+[tool.setuptools]
+packages = [
+    "MemGuard",
+    "MemGuard.audit",
+    "MemGuard.db",
+    "MemGuard.gateway",
+    "MemGuard.models",
+    "MemGuard.scanner",
+]
+
+[tool.setuptools.package-dir]
+MemGuard = "."
