@@ -18,12 +18,16 @@ All gateway operations are recorded in the structured audit log.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from ..audit.audit_log import StructuredAuditLogger
@@ -55,6 +59,11 @@ class MemoryStoreProtocol(Protocol):
     def query(
         self, query_text: str, n_results: int, exclude_unsafe: bool
     ) -> list[MemoryEntry]: ...
+    def list_all(
+        self, offset: int, limit: int, filter: str
+    ) -> tuple[list[MemoryEntry], int]: ...
+    def count(self) -> int: ...
+    def count_unsafe(self) -> int: ...
 
 
 class InMemoryStore:
@@ -82,6 +91,22 @@ class InMemoryStore:
             entries = [e for e in entries if not e.is_unsafe]
         return entries[:n_results]
 
+    def list_all(
+        self, offset: int = 0, limit: int = 20, filter: str = "all"
+    ) -> tuple[list[MemoryEntry], int]:
+        entries = list(self._entries.values())
+        if filter == "safe":
+            entries = [e for e in entries if not e.is_unsafe]
+        elif filter == "unsafe":
+            entries = [e for e in entries if e.is_unsafe]
+        return entries[offset: offset + limit], len(entries)
+
+    def count(self) -> int:
+        return len(self._entries)
+
+    def count_unsafe(self) -> int:
+        return sum(1 for e in self._entries.values() if e.is_unsafe)
+
 
 # ── Gateway singleton state ───────────────────────────────────────────────────
 
@@ -100,38 +125,79 @@ class _GatewayState:
 _state = _GatewayState()
 
 
+def _ensure_ed25519_key() -> None:
+    """Auto-generate Ed25519 key and persist to .env if not already set."""
+    if settings.memguard_ed25519_private_key:
+        return
+    km = KeyManager()
+    new_key = km.export_private_key_b64()
+    settings.memguard_ed25519_private_key = new_key
+
+    env_path = Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        text = env_path.read_text(encoding="utf-8")
+        if "MEMGUARD_ED25519_PRIVATE_KEY=" in text:
+            lines = []
+            for line in text.splitlines():
+                if line.startswith("MEMGUARD_ED25519_PRIVATE_KEY="):
+                    lines.append(f"MEMGUARD_ED25519_PRIVATE_KEY={new_key}")
+                else:
+                    lines.append(line)
+            env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        else:
+            with env_path.open("a", encoding="utf-8") as f:
+                f.write(f"\nMEMGUARD_ED25519_PRIVATE_KEY={new_key}\n")
+    print(f"[memguard] Ed25519 key auto-generated and saved to .env")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Auto-generate and persist Ed25519 key if not set
+    _ensure_ed25519_key()
     _state.key_manager = KeyManager(settings.memguard_ed25519_private_key)
     _state.sync_filter = SyncFilter()
     _state.memory_bank = DualMemoryBank()
-    _state.immune_detector = ImmuneDetector(
-        memory_bank=_state.memory_bank,
-        model=settings.embedding_model,
-        threshold=0.5,
-        top_k=5,
-    )
-    _state.active_immunity = ActiveImmunity(model=settings.shadow_exec_model)
     _state.audit_logger = StructuredAuditLogger(Path(settings.audit_log_file))
     _state.store = ChromaWrapper.ephemeral(
         collection_name=settings.chroma_collection,
     )
-    _state.scanner = PeriodicScanner(
-        store=_state.store,
-        immune_detector=_state.immune_detector,
-        memory_bank=_state.memory_bank,
-        audit_logger=_state.audit_logger,
-        model=settings.shadow_exec_model,
-        sample_size=settings.scan_sample_size,
-    )
-    # Seed dual memory banks with default attack + benign patterns
-    await _state.immune_detector.seed_default_patterns()
-    await _state.scanner.start(interval_minutes=settings.scan_interval_minutes)
+
+    has_openai = bool(settings.openai_api_key)
+    if has_openai:
+        _state.immune_detector = ImmuneDetector(
+            memory_bank=_state.memory_bank,
+            model=settings.embedding_model,
+            threshold=0.5,
+            top_k=5,
+        )
+        _state.active_immunity = ActiveImmunity(model=settings.shadow_exec_model)
+        _state.scanner = PeriodicScanner(
+            store=_state.store,
+            immune_detector=_state.immune_detector,
+            memory_bank=_state.memory_bank,
+            audit_logger=_state.audit_logger,
+            model=settings.shadow_exec_model,
+            sample_size=settings.scan_sample_size,
+        )
+        await _state.immune_detector.seed_default_patterns()
+        await _state.scanner.start(interval_minutes=settings.scan_interval_minutes)
+    else:
+        print("[memguard] OPENAI_API_KEY not set — IMAG immune detection and periodic scanner disabled.")
+        _state.immune_detector = None
+        _state.active_immunity = None
+        _state.scanner = None
+
     yield
-    await _state.scanner.stop()
+
+    if has_openai and _state.scanner:
+        await _state.scanner.stop()
 
 
 app = FastAPI(title="memguard Gateway", version="1.0.0", lifespan=lifespan)
+
+_static_dir = Path(__file__).parent.parent / "static"
+if _static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 
 # ── Request / Response schemas ────────────────────────────────────────────────
@@ -302,8 +368,9 @@ async def write_memory(
     _state.store.upsert(entry)
     _state.audit_logger.log_write(entry, actor="gateway.proxy")
 
-    # 7. Schedule async IMAG pipeline (Stage 1 → 2 → 3)
-    background_tasks.add_task(_immune_check_and_update, entry.entry_id, masked_content)
+    # 7. Schedule async IMAG pipeline (Stage 1 → 2 → 3) if enabled
+    if _state.immune_detector is not None:
+        background_tasks.add_task(_immune_check_and_update, entry.entry_id, masked_content)
 
     return MemoryWriteResponse(
         entry_id=entry.entry_id,
@@ -345,9 +412,70 @@ async def health() -> dict[str, Any]:
         "status": "ok",
         "attack_bank_size": _state.memory_bank.attack_size,
         "benign_bank_size": _state.memory_bank.benign_size,
-        "scanner_running": (
-            _state.scanner._scheduler is not None
+        "scanner_running": bool(
+            _state.scanner
+            and _state.scanner._scheduler is not None
             and _state.scanner._scheduler.running
         ),
+        "immune_enabled": _state.immune_detector is not None,
         "store": "ChromaDB",
     }
+
+
+@app.get("/v1/memory/list")
+async def list_memory(
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    filter: str = Query(default="all", pattern="^(all|safe|unsafe)$"),
+) -> dict[str, Any]:
+    entries, total = _state.store.list_all(offset=offset, limit=limit, filter=filter)
+    return {
+        "entries": [
+            {
+                "entry_id": e.entry_id,
+                "content": e.content[:120] + ("…" if len(e.content) > 120 else ""),
+                "source_id": e.source_id,
+                "source_type": e.source_type.value,
+                "session_hash": e.session_hash,
+                "timestamp": e.timestamp.isoformat(),
+                "trust_score": round(e.trust_score, 3),
+                "is_unsafe": e.is_unsafe,
+                "quarantine_reason": e.quarantine_reason or "",
+            }
+            for e in entries
+        ],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+    }
+
+
+@app.get("/v1/audit/logs")
+async def get_audit_logs(
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    log_path = Path(settings.audit_log_file)
+    if not log_path.exists():
+        return {"logs": [], "total": 0}
+
+    def _read() -> list[dict]:
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+        recent = lines[-limit:] if len(lines) > limit else lines
+        out = []
+        for line in reversed(recent):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except Exception:
+                continue
+        return out
+
+    logs = await asyncio.to_thread(_read)
+    return {"logs": logs, "total": len(logs)}
+
+
+@app.get("/ui", include_in_schema=False)
+async def ui_index() -> FileResponse:
+    return FileResponse(str(_static_dir / "index.html"))

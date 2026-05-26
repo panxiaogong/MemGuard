@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MemGuard // AMP-Engine</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <!-- Ambient blobs -->
+  <div class="blob-container">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+  </div>
+
+  <!-- Header -->
+  <header>
+    <div style="display:flex;align-items:center;gap:0.75rem;">
+      <div class="logo-mark">MG</div>
+      <div>
+        <div class="logo-name">MemGuard</div>
+        <div class="logo-sub">Agent Memory Protection Engine</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:0.6rem;">
+      <span class="status-dot" id="health-dot"></span>
+      <span class="status-text" id="health-text">CONNECTING</span>
+    </div>
+  </header>
+
+  <!-- Nav -->
+  <nav>
+    <button class="tab-btn" data-tab="overview">概览</button>
+    <button class="tab-btn" data-tab="entries">内存条目</button>
+    <button class="tab-btn" data-tab="audit">审计日志</button>
+    <button class="tab-btn" data-tab="interact">写入 / 查询</button>
+  </nav>
+
+  <main>
+
+    <!-- ── Overview ── -->
+    <div id="tab-overview" class="tab-pane" style="display:none;">
+
+      <!-- Layer 1: Gateway -->
+      <div style="font-size:0.72rem;color:var(--fg-muted);letter-spacing:0.2em;text-transform:uppercase;margin-bottom:0.75rem;">
+        <span style="color:var(--accent);text-shadow:var(--neon-sm);">▸</span>&nbsp; Layer 1 — Gateway Filter
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1.25rem;margin-bottom:2rem;">
+        <div class="stat-card">
+          <div class="stat-label">总条目 <span class="tip" data-tip="向量库中所有记忆条目的总数，包含安全与已隔离条目">?</span></div>
+          <div class="stat-val" id="s-total">—</div>
+          <div class="stat-sub">All memory entries in store</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">安全条目 <span class="tip" data-tip="通过全部三层过滤、未被隔离的条目数">?</span></div>
+          <div class="stat-val accent" id="s-safe">—</div>
+          <div class="stat-sub">Passed all filters</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">已隔离 <span class="tip" data-tip="被 IMAG 免疫核心或周期扫描器标记为可疑的条目数">?</span></div>
+          <div class="stat-val danger" id="s-unsafe">—</div>
+          <div class="stat-sub">Quarantined by IMAG / scanner</div>
+        </div>
+      </div>
+
+      <!-- Layer 2: IMAG Immune Core -->
+      <div style="font-size:0.72rem;color:var(--fg-muted);letter-spacing:0.2em;text-transform:uppercase;margin-bottom:0.75rem;">
+        <span style="color:var(--accent2);text-shadow:var(--neon-mag);">▸</span>&nbsp; Layer 2 — IMAG Immune Core
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.25rem;margin-bottom:2rem;">
+        <div class="stat-card">
+          <div class="stat-label">攻击记忆库 Mᵃ <span class="tip" data-tip="IMAG 长期积累的攻击模式向量库大小，用于语义相似度比对">?</span></div>
+          <div class="stat-val danger" id="s-attack">—</div>
+          <div class="stat-sub">Long-term attack patterns</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">良性记忆库 Mᵇ <span class="tip" data-tip="IMAG 长期积累的正常模式向量库大小，用于语义相似度比对">?</span></div>
+          <div class="stat-val accent" id="s-benign">—</div>
+          <div class="stat-sub">Long-term benign patterns</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">免疫检测 <span class="tip" data-tip="IMAG 双代理判断流水线，需配置 OPENAI_API_KEY 才能启用">?</span></div>
+          <div class="stat-val cyan" id="s-immune" style="font-size:2rem;">—</div>
+          <div class="stat-sub">IMAG dual-agent pipeline</div>
+        </div>
+      </div>
+
+      <!-- Layer 3: Scanner + System -->
+      <div style="font-size:0.72rem;color:var(--fg-muted);letter-spacing:0.2em;text-transform:uppercase;margin-bottom:0.75rem;">
+        <span style="color:var(--accent3);text-shadow:var(--neon-cyan);">▸</span>&nbsp; Layer 3 — Periodic Scanner &amp; System
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
+        <div class="stat-card">
+          <div class="stat-label">扫描器状态 <span class="tip" data-tip="宪法 AI 后台扫描器，每 5 分钟随机采样 20 条记忆重新评估">?</span></div>
+          <div class="stat-val" id="s-scanner" style="font-size:2.2rem;">—</div>
+          <div class="stat-sub">Constitutional AI · every 5 min · sample 20</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">系统信息</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-top:0.5rem;">
+            <div>
+              <div style="font-size:0.72rem;color:var(--fg-muted);letter-spacing:0.12em;margin-bottom:0.3rem;">STORE</div>
+              <div style="font-family:'Orbitron',monospace;font-size:1.3rem;font-weight:700;color:var(--accent3);text-shadow:var(--neon-cyan);">ChromaDB</div>
+            </div>
+            <div>
+              <div style="font-size:0.72rem;color:var(--fg-muted);letter-spacing:0.12em;margin-bottom:0.3rem;">VERSION</div>
+              <div style="font-family:'Orbitron',monospace;font-size:1.3rem;font-weight:700;color:var(--fg);">1.0.0</div>
+            </div>
+            <div>
+              <div style="font-size:0.72rem;color:var(--fg-muted);letter-spacing:0.12em;margin-bottom:0.3rem;">SIGNING</div>
+              <div style="font-family:'Orbitron',monospace;font-size:1.1rem;font-weight:700;color:var(--accent);">Ed25519</div>
+            </div>
+            <div>
+              <div style="font-size:0.72rem;color:var(--fg-muted);letter-spacing:0.12em;margin-bottom:0.3rem;">PROTOCOL</div>
+              <div style="font-family:'Orbitron',monospace;font-size:1.1rem;font-weight:700;color:var(--fg);">MAIF</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 接入指南 -->
+      <div style="margin-top:2rem;">
+        <button id="guide-toggle" class="guide-toggle-btn">
+          <span style="color:var(--accent);">▸</span>&nbsp;接入指南 &mdash; Quick Start
+          <span id="guide-arrow" style="margin-left:auto;font-size:0.7rem;">展开 ▾</span>
+        </button>
+        <div id="guide-body" class="guide-body" style="display:none;">
+
+          <!-- Step 1 -->
+          <div class="guide-step">
+            <div class="guide-step-num">01</div>
+            <div class="guide-step-content">
+              <div class="guide-step-title">安装依赖</div>
+              <div class="guide-step-desc">MemGuard 通过标准 HTTP 接口暴露服务，任何 HTTP 客户端均可接入。</div>
+              <pre class="guide-code">pip install httpx</pre>
+            </div>
+          </div>
+
+          <!-- Step 2 -->
+          <div class="guide-step">
+            <div class="guide-step-num">02</div>
+            <div class="guide-step-content">
+              <div class="guide-step-title">写入记忆</div>
+              <div class="guide-step-desc">将 Agent 产生的记忆通过 MemGuard 写入，自动完成注入检测、PII 脱敏和 IMAG 免疫审查。</div>
+              <pre class="guide-code"><span class="k">import</span> httpx
+
+resp = httpx.post(<span class="s">"http://localhost:8000/v1/memory/write"</span>, json={
+    <span class="s">"content"</span>:      <span class="s">"用户偏好深色主题"</span>,
+    <span class="s">"source_id"</span>:    <span class="s">"agent-001"</span>,
+    <span class="s">"source_type"</span>:  <span class="s">"USER_INPUT"</span>,  <span class="c"># USER_INPUT / EXTERNAL_URL / SYSTEM_GENERATED / TOOL_OUTPUT</span>
+    <span class="s">"session_hash"</span>: <span class="s">"session-abc"</span>,
+    <span class="s">"trust_score"</span>:  <span class="n">0.8</span>,           <span class="c"># 0~1，低于 0.5 触发额外审查</span>
+})
+<span class="k">print</span>(resp.json())  <span class="c"># {"status": "safe"} 或 {"status": "quarantined"}</span></pre>
+            </div>
+          </div>
+
+          <!-- Step 3 -->
+          <div class="guide-step">
+            <div class="guide-step-num">03</div>
+            <div class="guide-step-content">
+              <div class="guide-step-title">查询记忆</div>
+              <div class="guide-step-desc">语义检索，已隔离的条目不会出现在结果中。</div>
+              <pre class="guide-code">resp = httpx.post(<span class="s">"http://localhost:8000/v1/memory/read"</span>, json={
+    <span class="s">"query"</span>:        <span class="s">"用户界面偏好"</span>,
+    <span class="s">"session_hash"</span>: <span class="s">"session-abc"</span>,
+    <span class="s">"n_results"</span>:    <span class="n">5</span>,
+})
+<span class="k">for</span> entry <span class="k">in</span> resp.json()[<span class="s">"results"</span>]:
+    <span class="k">print</span>(entry[<span class="s">"content"</span>], entry[<span class="s">"trust_score"</span>])</pre>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── Memory Entries ── -->
+    <div id="tab-entries" class="tab-pane" style="display:none;">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.75rem;margin-bottom:1rem;">
+        <div style="display:flex;gap:0.4rem;" id="filter-btns">
+          <button class="filter-btn" data-filter="all">全部</button>
+          <button class="filter-btn" data-filter="safe">安全</button>
+          <button class="filter-btn" data-filter="unsafe">已隔离</button>
+        </div>
+        <div class="input-wrap" style="margin-left:auto;">
+          <input id="search-box" type="text" placeholder="搜索内容…" class="cyber-input" style="width:220px;">
+        </div>
+      </div>
+
+      <div class="cyber-table-wrap">
+        <table class="cyber-table">
+          <thead>
+            <tr>
+              <th>Entry ID</th>
+              <th>内容</th>
+              <th>来源</th>
+              <th>信任分</th>
+              <th>状态</th>
+              <th>时间</th>
+            </tr>
+          </thead>
+          <tbody id="entries-body">
+            <tr><td colspan="6" style="text-align:center;padding:2.5rem;color:var(--fg-muted);">
+              <span class="cursor">LOADING</span>
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:0.75rem;">
+        <span style="font-size:0.68rem;color:var(--fg-muted);letter-spacing:0.08em;" id="entries-info">—</span>
+        <div style="display:flex;gap:0.5rem;">
+          <button id="prev-btn" class="page-btn" disabled>◀ 上一页</button>
+          <button id="next-btn" class="page-btn" disabled>下一页 ▶</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Audit Log ── -->
+    <div id="tab-audit" class="tab-pane" style="display:none;">
+      <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
+        <select id="log-type-filter" class="cyber-select">
+          <option value="">// 全部事件</option>
+          <option value="WRITE">WRITE</option>
+          <option value="READ">READ</option>
+          <option value="IMMUNE">IMMUNE</option>
+          <option value="SHADOW">SHADOW</option>
+          <option value="QUARANTINE">QUARANTINE</option>
+          <option value="SCAN">SCAN</option>
+          <option value="INTERCEPT">INTERCEPT</option>
+        </select>
+        <span style="font-size:0.65rem;color:var(--fg-muted);margin-left:auto;letter-spacing:0.1em;" id="log-count">—</span>
+      </div>
+      <div class="audit-wrap" id="audit-log">
+        <div style="color:var(--fg-muted);font-size:0.7rem;"><span class="cursor">LOADING</span></div>
+      </div>
+    </div>
+
+    <!-- ── Write / Query ── -->
+    <div id="tab-interact" class="tab-pane" style="display:none;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;" class="grid-cols-1-mobile">
+
+        <!-- Write -->
+        <div class="panel">
+          <div class="panel-title">写入内存</div>
+          <div style="display:flex;flex-direction:column;gap:0.85rem;">
+            <div>
+              <label class="field-label">内容</label>
+              <div class="field-hint">要写入 AI 记忆库的文本，将经过注入检测、PII 脱敏和 IMAG 免疫审查</div>
+              <textarea id="w-content" rows="4" placeholder="输入要存储的内容…" class="field-input" style="resize:none;"></textarea>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;">
+              <div>
+                <label class="field-label">Source ID</label>
+                <div class="field-hint">写入来源的唯一标识，如 agent-001 或 user-abc</div>
+                <input id="w-source-id" type="text" value="ui-user" class="field-input">
+              </div>
+              <div>
+                <label class="field-label">来源类型</label>
+                <div class="field-hint">数据渠道，影响初始信任评估权重</div>
+                <select id="w-source-type" class="field-input">
+                  <option value="USER_INPUT">USER_INPUT</option>
+                  <option value="EXTERNAL_URL">EXTERNAL_URL</option>
+                  <option value="SYSTEM_GENERATED">SYSTEM_GENERATED</option>
+                  <option value="TOOL_OUTPUT">TOOL_OUTPUT</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label class="field-label">Session Hash</label>
+              <div class="field-hint">会话标识符，用于隔离不同对话的记忆空间</div>
+              <input id="w-session" type="text" value="ui-session-001" class="field-input">
+            </div>
+            <div>
+              <label class="field-label">
+                信任分&nbsp;
+                <span id="w-trust-val" style="color:var(--accent);text-shadow:var(--neon-sm);">0.80</span>
+              </label>
+              <div class="field-hint">0 = 完全不可信，1 = 完全可信；低于 0.5 会触发额外审查</div>
+              <input id="w-trust" type="range" min="0" max="1" step="0.05" value="0.8" style="width:100%;">
+            </div>
+            <button id="write-btn" class="btn-primary">写入内存</button>
+          </div>
+          <div id="write-result" class="result-box" style="display:none;"></div>
+        </div>
+
+        <!-- Query -->
+        <div class="panel">
+          <div class="panel-title" style="color:var(--accent3);text-shadow:var(--neon-cyan);">查询内存</div>
+          <div style="display:flex;flex-direction:column;gap:0.85rem;">
+            <div>
+              <label class="field-label">查询文本</label>
+              <div class="field-hint">用自然语言描述想检索的内容，系统做语义相似度匹配</div>
+              <textarea id="q-content" rows="4" placeholder="输入查询文本…" class="field-input" style="resize:none;"></textarea>
+            </div>
+            <div>
+              <label class="field-label">Session Hash</label>
+              <div class="field-hint">会话标识符，用于隔离不同对话的记忆空间</div>
+              <input id="q-session" type="text" value="ui-session-001" class="field-input">
+            </div>
+            <div>
+              <label class="field-label">
+                返回条数&nbsp;
+                <span id="q-n-val" style="color:var(--accent3);text-shadow:var(--neon-cyan);">5</span>
+              </label>
+              <div class="field-hint">返回语义最相近的前 N 条安全记忆（已隔离条目不会出现）</div>
+              <input id="q-nresults" type="range" min="1" max="20" step="1" value="5" style="width:100%;">
+            </div>
+            <button id="query-btn" class="btn-secondary">查询内存</button>
+          </div>
+          <div id="query-result" class="result-box" style="display:none;"></div>
+        </div>
+
+      </div>
+    </div>
+
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

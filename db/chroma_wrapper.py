@@ -222,3 +222,33 @@ class ChromaWrapper:
             include=[],
         )
         return len(result.get("ids") or [])
+
+    def list_all(
+        self,
+        offset: int = 0,
+        limit: int = 20,
+        filter: str = "all",
+    ) -> tuple[list[MemoryEntry], int]:
+        """Return a paginated slice of entries with total count."""
+        if filter == "safe":
+            where = {"is_unsafe": {"$eq": False}}
+        elif filter == "unsafe":
+            where = {"is_unsafe": {"$eq": True}}
+        else:
+            where = None
+
+        result = self._collection.get(
+            where=where,
+            include=["documents", "metadatas"],
+        )
+        all_docs = result.get("documents") or []
+        all_metas = result.get("metadatas") or []
+        total = len(all_docs)
+
+        entries: list[MemoryEntry] = []
+        for doc, meta in zip(all_docs[offset: offset + limit], all_metas[offset: offset + limit]):
+            try:
+                entries.append(MemoryEntry.from_chroma_document(doc, meta))
+            except Exception:
+                continue
+        return entries, total
