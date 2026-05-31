@@ -124,7 +124,7 @@ class SyncFilter:
                 warnings.append(f"pii_detected:{pii_type}")
 
         return FilterResult(
-            blocked=len(reasons) > 0,
+            blocked=len(reasons) > 0 or (self._block_on_pii and len(pii_found) > 0),
             reasons=reasons,
             pii_found=pii_found,
             warnings=warnings,
