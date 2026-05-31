@@ -324,13 +324,11 @@ class PeriodicScanner:
         embedding = await self._immune_detector.embed(entry.content)
 
         if probe.recommended_action == "quarantine":
-            # Quarantine in store
-            self._store.update_safety(
-                entry.entry_id,
-                is_unsafe=True,
+            # Quarantine entry (local) and add both audit events, then single upsert
+            entry.quarantine(
+                actor="scanner.periodic",
                 reason=f"scanner:{probe.reason[:120]}",
             )
-            # Append SHADOW_EXEC_UNSAFE to entry's audit trail
             entry.add_audit_event(
                 AuditEvent(
                     event_type=AuditEventType.SHADOW_EXEC_UNSAFE,
@@ -343,6 +341,7 @@ class PeriodicScanner:
                     },
                 )
             )
+            self._store.upsert(entry)
             # Add to attack short-term memory (will be promoted after cycle)
             self._memory_bank.add_short_term(embedding, "attack", entry.content)
             self._audit_logger.log_event(
@@ -356,7 +355,6 @@ class PeriodicScanner:
                 decay_factor=self._DECAY_FACTOR_MEDIUM,
                 reason=f"scanner:medium_risk:{probe.reason[:80]}",
             )
-            self._store.upsert(entry)
             entry.add_audit_event(
                 AuditEvent(
                     event_type=AuditEventType.SHADOW_EXEC_UNSAFE,
@@ -365,6 +363,9 @@ class PeriodicScanner:
                     metadata={"risk_level": probe.risk_level},
                 )
             )
+            # Single upsert after ALL audit events so both DECAY_APPLIED and
+            # SHADOW_EXEC_UNSAFE are persisted together
+            self._store.upsert(entry)
             self._audit_logger.log_event(entry, entry.audit_trail[-1])
 
         else:  # pass

@@ -93,7 +93,7 @@ def test_fast_check_catches_system_file_write() -> None:
 
 def test_fast_check_catches_privilege_escalation() -> None:
     matches = fast_danger_check("sudo rm -rf /var/log")
-    assert any(m.pattern_name == "sudo_destructive" for m in matches)
+    assert any(m.pattern_name == "sudo_destructive_high" for m in matches)
 
 
 def test_fast_check_returns_empty_for_benign() -> None:
