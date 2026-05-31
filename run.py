@@ -20,6 +20,7 @@ else:
     base = Path(__file__).parent
 
 import uvicorn
+from MemGuard.config import settings
 from MemGuard.gateway.proxy import app
 
 
@@ -34,4 +35,4 @@ if __name__ == "__main__":
     print("  Dashboard: http://localhost:8080/ui")
     print("=" * 56)
     threading.Thread(target=open_browser, daemon=True).start()
-    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=settings.gateway_port, log_level="info")
