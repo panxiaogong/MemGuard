@@ -39,6 +39,7 @@ from .immune_client import (
     DualMemoryBank,
     ImmuneDetector,
 )
+from .tool_proxy import ToolProxy
 from ..models.memory_entry import (
     AuditEvent,
     AuditEventType,
@@ -120,6 +121,7 @@ class _GatewayState:
     audit_logger: StructuredAuditLogger
     store: MemoryStoreProtocol
     scanner: PeriodicScanner
+    tool_proxy: ToolProxy
 
 
 _state = _GatewayState()
@@ -158,6 +160,9 @@ async def lifespan(app: FastAPI):
     _state.sync_filter = SyncFilter()
     _state.memory_bank = DualMemoryBank()
     _state.audit_logger = StructuredAuditLogger(Path(settings.audit_log_file))
+    _state.tool_proxy = ToolProxy(audit_logger=_state.audit_logger)
+    _state.tool_proxy.register_default_tools()
+    app.include_router(_state.tool_proxy.router, prefix="/v1/tools")
     _state.store = ChromaWrapper.ephemeral(
         collection_name=settings.chroma_collection,
     )
@@ -198,7 +203,6 @@ app = FastAPI(title="memguard Gateway", version="1.0.0", lifespan=lifespan)
 _static_dir = Path(__file__).parent.parent / "static"
 if _static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
-
 
 # ── Request / Response schemas ────────────────────────────────────────────────
 
@@ -419,6 +423,10 @@ async def health() -> dict[str, Any]:
         ),
         "immune_enabled": _state.immune_detector is not None,
         "store": "ChromaDB",
+        "tool_proxy": {
+            "tools": _state.tool_proxy._registry.tool_count if hasattr(_state, "tool_proxy") else 0,
+            "policy_rules": _state.tool_proxy._policy.rule_count if hasattr(_state, "tool_proxy") else 0,
+        },
     }
 
 

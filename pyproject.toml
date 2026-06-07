@@ -65,6 +65,7 @@ packages = [
     "MemGuard.gateway",
     "MemGuard.models",
     "MemGuard.scanner",
+    "MemGuard.tools",
 ]
 
 [tool.setuptools.package-dir]
