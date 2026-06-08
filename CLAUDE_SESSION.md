@@ -32,7 +32,7 @@ MemGuard 是一个面向大模型 Agent 长期记忆系统的安全防护框架�
 | `static/` | Web 仪表盘（index.html + app.js + style.css） |
 | `agent_demo.py` | 原有 Agent 接入演示（仅记忆读写） |
 
-### 本轮新增（工具调用监控层）
+### 本轮新增（工具调用监控层 + 链路追踪）
 
 **新增文件清单：**
 
@@ -46,14 +46,16 @@ MemGuard 是一个面向大模型 Agent 长期记忆系统的安全防护框架�
 | `tools/__init__.py` | 包导出 |
 | `gateway/policy_engine.py` | 安全策略引擎（allow/deny/ask 三级决策 + 速率限制 + 审批工作流） |
 | `gateway/tool_proxy.py` | 工具调用拦截代理（参数验证→策略评估→执行/阻断→审计全链路） |
-| `scripts/agent_memguard_langgraph.py` | LangGraph ReAct Agent 集成演示（4 场景安全展示） |
+| `gateway/chain_monitor.py` | **本轮新增** 链路监控（Trace ID + 全链路步骤追踪 + 耗时记录） |
+| `scripts/agent_memguard_langgraph.py` | **本轮新增** LangGraph ReAct Agent 集成演示（4 场景安全展示） |
 
 **修改的文件清单：**
 
 | 文件 | 改动内容 |
 |------|----------|
-| `gateway/proxy.py` | 引入 ToolProxy，lifespan 中初始化并注册路由到 `/v1/tools`，health接口增加 tool_proxy 状态 |
-| `gateway/__init__.py` | 导出 PolicyEngine / ToolProxy / ToolCallResponse |
+| `gateway/proxy.py` | 引入 ToolProxy/ChainMonitor，lifespan 初始化并注册路由到 `/v1/tools`；health 增加 tool_proxy/chain_monitor 状态；write/read 端点增加 Trace 步骤追踪；注册链路监控中间件 |
+| `gateway/tool_proxy.py` | 接受 chain_monitor 引用，call_tool 中 4 步（lookup/validate/policy/execute）均记录 Trace |
+| `gateway/__init__.py` | 导出 ChainMonitor / TraceContext / TraceStep |
 | `pyproject.toml` | 新增 `MemGuard.tools` 包 |
 
 **新增 API 端点：**
@@ -92,10 +94,10 @@ GET  /v1/tools/stats         # 统计信息
 
 ```
 P0 ✅ 工具调用拦截代理 + 模拟业务工具集（已完成）
-P1 🔜 集成开源Agent应用（当前目标）
-P2 ⬜ 攻击场景脚本 + 测试用例集
+P1 ✅ 集成开源Agent应用（已完成）
+P2 ⬜ 攻击场景脚本 + 测试用例集（非你负责）
 P3 ⬜ 安全风险分析报告文档
-P4 ⬜ 模型调用链路监控
+P4 ✅ 模型调用链路监控（已完成）
 P5 ⬜ 基座模型检测/过滤原型
 P6 ⬜ Web仪表盘实时告警
 P7 ⬜ 扩展对抗样本数据集
@@ -144,7 +146,20 @@ MemGuard 网关 → PolicyEngine (ALLOW/DENY/ASK)
 
 ---
 
-### 再往后：剩余任务简要规划
+### P4: 模型调用链路监控（已完成 ✅）
+
+**新增文件：** `gateway/chain_monitor.py`
+
+**链路追踪覆盖：**
+```
+HTTP 请求 → ChainMonitor 中间件 (创建 Trace)
+  ├─ /v1/memory/write  → http.POST → memory.write
+  ├─ /v1/memory/read   → http.POST → memory.read
+  └─ /v1/tools/call    → http.POST → tool.lookup → tool.validate → policy.evaluate → tool.execute
+每个 Trace 写一条 TRACE_COMPLETE 审计日志 + 响应头 X-Trace-ID
+```
+
+---
 
 #### P2: 攻击场景脚本 + 测试用例集 (`scripts/`, `tests/attacks/`)
 - 场景A：工具调用劫持（邮件重定向、文件泄露、内网扫描）
@@ -215,4 +230,5 @@ curl "http://localhost:8080/v1/tools/list"
 2. 按优先级排序完善计划
 3. 实施第一优先级：工具调用拦截代理 + 模拟业务工具集（完成并验证通过）
 4. ~~尝试了 LangChain Agent 集成，方向理解错误，已回退~~
-5. 纠正方向：集成现有开源 Agent（`langgraph.prebuilt.create_react_agent`）→ 下一窗口执行
+5. 纠正方向：集成现有开源 Agent（LangGraph `create_agent`）+ 4 场景演示脚本
+6. 实施 P4：模型调用链路监控（ChainMonitor + Trace ID + 全链路追踪，已完成并验证通过）

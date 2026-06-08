@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from ..audit.audit_log import StructuredAuditLogger
 from ..config import settings
 from ..db.chroma_wrapper import ChromaWrapper
+from .chain_monitor import ChainMonitor
 from .filters import SyncFilter
 from .immune_client import (
     ActiveImmunity,
@@ -122,9 +123,13 @@ class _GatewayState:
     store: MemoryStoreProtocol
     scanner: PeriodicScanner
     tool_proxy: ToolProxy
+    chain_monitor: ChainMonitor
 
 
 _state = _GatewayState()
+
+# 初始化链路监控（无 audit_logger，lifespan 中会补充）
+_state.chain_monitor = ChainMonitor()
 
 
 def _ensure_ed25519_key() -> None:
@@ -160,7 +165,11 @@ async def lifespan(app: FastAPI):
     _state.sync_filter = SyncFilter()
     _state.memory_bank = DualMemoryBank()
     _state.audit_logger = StructuredAuditLogger(Path(settings.audit_log_file))
-    _state.tool_proxy = ToolProxy(audit_logger=_state.audit_logger)
+    _state.chain_monitor.set_audit_logger(_state.audit_logger)
+    _state.tool_proxy = ToolProxy(
+        audit_logger=_state.audit_logger,
+        chain_monitor=_state.chain_monitor,
+    )
     _state.tool_proxy.register_default_tools()
     app.include_router(_state.tool_proxy.router, prefix="/v1/tools")
     _state.store = ChromaWrapper.ephemeral(
@@ -199,6 +208,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="memguard Gateway", version="1.0.0", lifespan=lifespan)
+
+# 注册链路监控中间件（必须在 lifespan 之前，因为 FastAPI 启动后不能加中间件）
+app.middleware("http")(_state.chain_monitor.middleware)
 
 _static_dir = Path(__file__).parent.parent / "static"
 if _static_dir.exists():
@@ -322,10 +334,20 @@ async def _immune_check_and_update(entry_id: str, content: str) -> None:
 async def write_memory(
     req: MemoryWriteRequest, background_tasks: BackgroundTasks
 ) -> MemoryWriteResponse:
+    # ── Trace: 开始写步骤 ─────────────────────────────────────────────────────
+    step = _state.chain_monitor.start_step(
+        "memory.write",
+        input_summary=f"content={req.content[:80]} source={req.source_id}",
+    )
+
     # 1. Sync filter: PII + injection detection
     filter_result, masked_content = _state.sync_filter.check_and_mask(req.content)
 
     if filter_result.blocked:
+        _state.chain_monitor.finish_step(
+            step, status="blocked",
+            output_summary=f"blocked: {', '.join(filter_result.reasons)}",
+        )
         _state.audit_logger.log_interception(
             entry_id="(pre-create)",
             source_id=req.source_id,
@@ -372,6 +394,12 @@ async def write_memory(
     _state.store.upsert(entry)
     _state.audit_logger.log_write(entry, actor="gateway.proxy")
 
+    # ── Trace: 完成写步骤 ─────────────────────────────────────────────────────
+    _state.chain_monitor.finish_step(
+        step, status="success",
+        output_summary=f"entry_id={entry.entry_id[:12]} trust={req.trust_score}",
+    )
+
     # 7. Schedule async IMAG pipeline (Stage 1 → 2 → 3) if enabled
     if _state.immune_detector is not None:
         background_tasks.add_task(_immune_check_and_update, entry.entry_id, masked_content)
@@ -386,6 +414,12 @@ async def write_memory(
 
 @app.post("/v1/memory/read", response_model=MemoryReadResponse)
 async def read_memory(req: MemoryReadRequest) -> MemoryReadResponse:
+    # ── Trace: 开始读步骤 ─────────────────────────────────────────────────────
+    step = _state.chain_monitor.start_step(
+        "memory.read",
+        input_summary=f"query={req.query[:80]} n={req.n_results}",
+    )
+
     all_results = _state.store.query(
         req.query, n_results=req.n_results * 2, exclude_unsafe=False
     )
@@ -403,6 +437,12 @@ async def read_memory(req: MemoryReadRequest) -> MemoryReadResponse:
                 entry.entry_id, actor="gateway.proxy", blocked=False
             )
             safe_entries.append(entry)
+
+    # ── Trace: 完成读步骤 ─────────────────────────────────────────────────────
+    _state.chain_monitor.finish_step(
+        step, status="success",
+        output_summary=f"returned={len(safe_entries)} filtered={filtered_count}",
+    )
 
     return MemoryReadResponse(
         entries=[e.to_dict() for e in safe_entries[: req.n_results]],
@@ -426,6 +466,9 @@ async def health() -> dict[str, Any]:
         "tool_proxy": {
             "tools": _state.tool_proxy._registry.tool_count if hasattr(_state, "tool_proxy") else 0,
             "policy_rules": _state.tool_proxy._policy.rule_count if hasattr(_state, "tool_proxy") else 0,
+        },
+        "chain_monitor": {
+            "total_traces": _state.chain_monitor.total_traces if hasattr(_state, "chain_monitor") else 0,
         },
     }
 

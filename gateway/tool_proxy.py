@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from ..audit.audit_log import StructuredAuditLogger
 from ..tools.base import BaseTool, ToolRegistry, ToolResult
+from .chain_monitor import ChainMonitor
 from .policy_engine import PolicyAction, PolicyDecision, PolicyEngine, PolicyRule
 
 
@@ -72,7 +73,7 @@ class ToolProxy:
     Central proxy that intercepts and monitors all agent tool calls.
 
     Usage:
-        proxy = ToolProxy(audit_logger=audit_logger)
+        proxy = ToolProxy(audit_logger=audit_logger, chain_monitor=chain_monitor)
         proxy.register_default_tools()
         app.include_router(proxy.router, prefix="/v1/tools")
     """
@@ -81,10 +82,12 @@ class ToolProxy:
         self,
         audit_logger: Optional[StructuredAuditLogger] = None,
         policy_engine: Optional[PolicyEngine] = None,
+        chain_monitor: Optional[ChainMonitor] = None,
     ):
         self._registry = ToolRegistry()
         self._policy = policy_engine or PolicyEngine()
         self._audit = audit_logger
+        self._chain_monitor = chain_monitor
         self._call_count = 0
         self.router = APIRouter(tags=["tool_proxy"])
         self._register_routes()
@@ -121,9 +124,19 @@ class ToolProxy:
         """
         start = time.time()
 
+        # ── Trace step: tool lookup ─────────────────────────────────────────────
+        lookup_step = self._chain_monitor.start_step(
+            "tool.lookup", input_summary=f"tool={tool_name}",
+        ) if self._chain_monitor else None
+
         # 1. Look up tool
         tool = self._registry.get(tool_name)
         if tool is None:
+            if self._chain_monitor:
+                self._chain_monitor.finish_step(
+                    lookup_step, status="error",
+                    output_summary=f"unknown tool: {tool_name}",
+                )
             self._log_action(
                 action="TOOL_CALL_UNKNOWN",
                 tool_name=tool_name,
@@ -141,9 +154,23 @@ class ToolProxy:
                 execution_time_ms=(time.time() - start) * 1000,
             )
 
+        if self._chain_monitor:
+            self._chain_monitor.finish_step(lookup_step, status="success")
+
+        # ── Trace step: validation ──────────────────────────────────────────────
+        validate_step = self._chain_monitor.start_step(
+            "tool.validate",
+            input_summary=f"params={str(list(params.keys()))}",
+        ) if self._chain_monitor else None
+
         # 2. Validate parameters against schema
         validation_errors = tool.validate_params(params)
         if validation_errors:
+            if self._chain_monitor:
+                self._chain_monitor.finish_step(
+                    validate_step, status="blocked",
+                    output_summary="; ".join(validation_errors),
+                )
             self._log_action(
                 action="TOOL_CALL_INVALID_PARAMS",
                 tool_name=tool_name,
@@ -161,10 +188,24 @@ class ToolProxy:
                 execution_time_ms=(time.time() - start) * 1000,
             )
 
+        if self._chain_monitor:
+            self._chain_monitor.finish_step(validate_step, status="success")
+
+        # ── Trace step: policy evaluation ───────────────────────────────────────
+        policy_step = self._chain_monitor.start_step(
+            "policy.evaluate",
+            input_summary=f"tool={tool_name}",
+        ) if self._chain_monitor else None
+
         # 3. Policy evaluation
         decision = self._policy.evaluate(tool_name, params)
 
         if decision.action == PolicyAction.DENY:
+            if self._chain_monitor:
+                self._chain_monitor.finish_step(
+                    policy_step, status="blocked",
+                    output_summary=f"rule={decision.rule_id}: {decision.reason}",
+                )
             self._log_action(
                 action="TOOL_CALL_BLOCKED",
                 tool_name=tool_name,
@@ -183,6 +224,11 @@ class ToolProxy:
             )
 
         if decision.action == PolicyAction.ASK:
+            if self._chain_monitor:
+                self._chain_monitor.finish_step(
+                    policy_step, status="pending",
+                    output_summary=f"ask: rule={decision.rule_id} approval={decision.approval_id}",
+                )
             self._log_action(
                 action="TOOL_CALL_PENDING_APPROVAL",
                 tool_name=tool_name,
@@ -201,10 +247,26 @@ class ToolProxy:
                 execution_time_ms=(time.time() - start) * 1000,
             )
 
+        if self._chain_monitor:
+            self._chain_monitor.finish_step(
+                policy_step, status="success",
+                output_summary=f"allow: rule={decision.rule_id}",
+            )
+
+        # ── Trace step: execute ────────────────────────────────────────────────
+        exec_step = self._chain_monitor.start_step(
+            "tool.execute",
+            input_summary=f"tool={tool_name}",
+        ) if self._chain_monitor else None
+
         # 4. ALLOW — execute the tool
         try:
             result = await tool.execute(params)
         except Exception as exc:
+            if self._chain_monitor:
+                self._chain_monitor.finish_step(
+                    exec_step, status="error", output_summary=str(exc)[:200],
+                )
             self._log_action(
                 action="TOOL_CALL_ERROR",
                 tool_name=tool_name,
@@ -225,6 +287,13 @@ class ToolProxy:
 
         # 5. Log successful execution
         self._call_count += 1
+
+        if self._chain_monitor:
+            self._chain_monitor.finish_step(
+                exec_step, status="success",
+                output_summary=f"outcome={result.outcome.value}",
+            )
+
         self._log_action(
             action="TOOL_CALL_EXECUTED",
             tool_name=tool_name,
