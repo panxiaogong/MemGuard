@@ -1,6 +1,6 @@
 # MemGuard — 当前会话状态
 
-> 生成时间：2026-06-07
+> 生成时间：2026-06-08
 > 用途：新窗口读取此文件以了解对话进度，继续工作
 
 ---
@@ -46,6 +46,7 @@ MemGuard 是一个面向大模型 Agent 长期记忆系统的安全防护框架�
 | `tools/__init__.py` | 包导出 |
 | `gateway/policy_engine.py` | 安全策略引擎（allow/deny/ask 三级决策 + 速率限制 + 审批工作流） |
 | `gateway/tool_proxy.py` | 工具调用拦截代理（参数验证→策略评估→执行/阻断→审计全链路） |
+| `scripts/agent_memguard_langgraph.py` | LangGraph ReAct Agent 集成演示（4 场景安全展示） |
 
 **修改的文件清单：**
 
@@ -100,53 +101,46 @@ P6 ⬜ Web仪表盘实时告警
 P7 ⬜ 扩展对抗样本数据集
 ```
 
-### 下一步：集成开源 Agent 应用（已完成）
+### 下一步：集成开源 Agent 应用（正确方向）
 
-**目标**：写一个 LangChain Agent Demo 脚本，通过 MemGuard 的 ToolProxy 调工具，展示完整链路。
+**注意：** 之前方向理解错误——不是自己写一个 Agent，而是拿**市面上已有的开源 Agent**，把 MemGuard 作为安全中间件插进去。
 
-**新建文件**：[scripts/agent_memguard_langchain.py](scripts/agent_memguard_langchain.py)
+**计划使用**：`langgraph.prebuilt.create_react_agent`（LangGraph 官方开源的 ReAct Agent，已安装）。
 
-**架构**：
+**集成方案：**
+
 ```
-LangChain Agent (create_agent) → MemGuardProxyTool → POST /v1/tools/call → PolicyEngine → ALLOW / DENY / ASK
+LangGraph ReAct Agent (现成的开源Agent)
+  ↓ 调用工具
+MemGuardProxyTool (安全包装层 — 我们不写Agent逻辑，只封装安全层)
+  ↓ HTTP POST /v1/tools/call
+MemGuard 网关 → PolicyEngine (ALLOW/DENY/ASK)
 ```
 
-**5 个 LangChain 工具（均通过 MemGuard 安全网关代理）：**
+**核心思路：**
+- 不写 Agent 推理逻辑——`create_react_agent` 自带 ReAct 循环
+- 只写工具封装层（`MemGuardProxyTool`），拦截它的工具调用到 MemGuard 网关
+- Agent 感知不到 MemGuard 的存在，安全性是透明的
 
-| 工具名 | 类名 | 参数 | 安全策略 |
-|--------|------|------|---------|
-| `send_email` | SendEmailTool | to, subject, body, cc, priority | 公司域名 ALLOW / 可疑域名 DENY |
-| `run_command` | RunCommandTool | command, cwd, timeout | rm -rf 等高危 DENY |
-| `call_api` | CallApiTool | url, method, headers, body | 内网 DENY / 外部 ASK |
-| `file_io` | FileIOTool | operation, path, content | 系统路径 DENY |
-| `search_memory` | SearchMemoryTool | query | 直接查记忆库（非工具调用） |
+**计划新建文件：** `scripts/agent_memguard_langgraph.py`
 
-**4 个演示场景已验证通过（代码级验证）：**
+**需要演示的 4 个场景：**
 
 | 场景 | 触发方式 | MemGuard 反应 |
 |:----:|----------|--------------|
-| 1️⃣ 正常邮件 | send_email to @company.com | ✅ ALLOW（demo 白名单策略） |
-| 2️⃣ 危险拦截 | run_command rm -rf | ❌ DENY（高危命令策略） |
+| 1️⃣ 正常邮件 | send_email to 白名单域名 | ✅ ALLOW |
+| 2️⃣ 危险拦截 | run_command rm -rf | ❌ DENY |
 | 3️⃣ 需审批 | call_api 外部 URL | ⏳ ASK → 模拟审批通过 |
-| 4️⃣ 双层防护 | 记忆投毒 → send_email to tempmail | 🔒 记忆层 + 工具层拦截 |
+| 4️⃣ 双层防护 | 记忆投毒 + 诱导发信到可疑地址 | 🔒 记忆层 + 工具层拦截 |
 
-**运行方式：**
-```bash
-# 先关掉梯子，然后输入这个命令启动网关
-python -m uvicorn MemGuard.gateway.proxy:app --port 8080
-# 另开一终端
-python scripts/agent_memguard_langchain.py
-```
+**前置条件：**
+- `.env` 中配置 `OPENAI_API_KEY`
+- MemGuard 网关先启动：`uvicorn gateway.proxy:app --port 8080`
+- 环境 `andymemg` 已有 `langgraph`、`langchain-openai`、`httpx`
 
-**技术要点：**
-- 使用 LangChain 新版 `create_agent` (graph-based, langgraph)
-- 工具通过 `BaseTool` 子类 + `args_schema` (Pydantic) 定义参数
-- 调用通过 `MemGuardClient.call_tool()` → HTTP POST → MemGuard 网关
-- 记忆搜索直接调 `/v1/memory/read`（非工具类操作）
-- 审批流程通过 `POST /v1/tools/approve` 模拟管理员操作
-- 运行前需 `.env` 配置 `OPENAI_API_KEY`
-
-**依赖：** langchain>=1.3, langchain-openai, openai, httpx, pydantic, python-dotenv
+**注意事项：**
+- 不需要改任何现有代码
+- Agent 只通过 HTTP 跟 MemGuard 通信（`POST /v1/tools/call`）
 
 ---
 
@@ -185,11 +179,6 @@ python scripts/agent_memguard_langchain.py
 
 ---
 
-### 组员信息文档
-组员进度同步文档：[docs/progress_report.md](docs/progress_report.md) — 包含已完成工作、技术架构图、剩余任务分工建议。
-
----
-
 ## 技术要点（新窗口的人注意）
 
 ### 已验证通过的功能
@@ -202,7 +191,7 @@ python scripts/agent_memguard_langchain.py
 ### 运行方式
 ```bash
 # 启动网关
-python -m uvicorn MemGuard.gateway.proxy:app --port 8080
+uvicorn gateway.proxy:app --host 0.0.0.0 --port 8080
 
 # 测试工具代理
 curl -X POST "http://localhost:8080/v1/tools/call" \
@@ -220,9 +209,10 @@ curl "http://localhost:8080/v1/tools/list"
 
 ## 对话上下文（供参考）
 
-用户是竞赛参与者，项目在 `d:\Codes\XinAn\MemGuard`，Windows 环境，Python 3.13，conda 环境名 `andymemg`。
+用户是竞赛参与者，项目在 `d:\Codes\XinAn\MemGuard`，Windows 环境，Python 3.10+，conda 环境名 `andymemg`。
 已完成的对话内容包括：
 1. 全面分析现有代码与竞赛命题要求的差距
 2. 按优先级排序完善计划
 3. 实施第一优先级：工具调用拦截代理 + 模拟业务工具集（完成并验证通过）
-4. 当前正转向第二优先级：集成开源Agent应用
+4. ~~尝试了 LangChain Agent 集成，方向理解错误，已回退~~
+5. 纠正方向：集成现有开源 Agent（`langgraph.prebuilt.create_react_agent`）→ 下一窗口执行
